@@ -30,6 +30,36 @@ def interval(sleep):
     return real_decorator
 
 
+def hlwm(hook):
+    def real_decorator(function):
+        def wrapper(self, *args, **kwargs):
+            process = sub.Popen(
+                ['herbstclient', '--idle'],
+                stdout=sub.PIPE
+            )
+            while True:
+                output = process.stdout.readline()
+                if not output:
+                    break
+
+                output = output.decode()
+                output = output.replace('\n', '')
+                if hook in output:
+                    hc_hook = []
+                    for part in output.split('\t'):
+                        if len(part) > 0:
+                            hc_hook.append(part)
+                    ret = function(self, hc_hook)
+
+                    fn = function.__name__
+                    self.write(fn, ret)
+
+        wrapper.hook = hook
+        wrapper.runner = True
+        return wrapper
+    return real_decorator
+
+
 def static(function):
     def wrapper(self, *args, **kwargs):
         ret = function(self)
@@ -72,6 +102,8 @@ class Dzentinel(object):
             '.local/share/infect/misc/x11/dzentinel/icons'
         )
 
+        self.monitor = "0"
+
         self.checkhost = "google.com"
 
         self.pac_count = "/dev/shm/fakepacdb/counts"
@@ -108,6 +140,44 @@ class Dzentinel(object):
         fg = self.colors[fg] if fg is not None else self.colors["fg_1"]
         bg = self.colors[bg] if bg is not None else self.colors["bg_1"]
         return "^fg(%s)^bg(%s)%s^fg()^bg()" % (fg, bg, text)
+
+    @hlwm("tag")
+    def tags(self, hook):
+        output = sub.Popen(
+            ['herbstclient', 'tag_status'],
+            stdout=sub.PIPE
+        ).communicate()[0].decode()
+        tags = ""
+        for tag in output.split('\t'):
+            if len(tag) == 0 or tag[:1] == '\n':
+                continue
+            else:
+                state = tag[0]
+                tag = tag[1:]
+
+            if state == "#":
+                # Active tag
+                tag_design = self.colorize(" %s " % tag, fg="bg_1", bg="fg_3")
+            elif state == "+":
+                # Urgent tag
+                tag_design = self.colorize(" %s " % tag, fg="bg_1", bg="crit")
+            elif state == "!":
+                # Urgent tag
+                tag_design = self.colorize(" %s " % tag, fg="bg_1", bg="crit")
+            else:
+                # Regular ol' tag
+                tag_design = self.colorize(" %s " % tag)
+
+            tags += "^ca(1,herbstclient focus_monitor 0 && herbstclient use %s)%s^ca()" % (
+                tag,
+                tag_design
+            )
+
+        return tags
+
+    @hlwm("focus_changed")
+    def windowtitle(self, hook):
+        return hook[2]
 
     @interval(1)
     def date(self):
@@ -189,7 +259,7 @@ class Dzentinel(object):
             self.colorize(int(swap.used / 1024**2), fg="fg_2")
         )
 
-    @interval(10)
+    @interval(100)
     def packages(self):
         icon = self.icon("pacman")
         fakedb = join("/dev", "shm", "fakepacdb")
